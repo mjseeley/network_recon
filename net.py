@@ -1,7 +1,8 @@
 import re
-import sys
+import oid
 import time
 from collections import defaultdict
+from pysnmp.entity.rfc3413.oneliner import cmdgen
 
 __author__ = 'Mike Seeley'
 
@@ -11,117 +12,43 @@ net.py
 
 """
 
+
 # Todo: Find bottlenecks: Regex, str searches, snmp walk vs bulkget, Etc... Currently doubles overall runtime. :(
 
-
-# Try import of pysnmp module, won't work without it.
-try:
-    from pysnmp.entity.rfc3413.oneliner import cmdgen
-except Exception as e:
-    print("FATAL: failed to load required module 'pysnmp'", e)
-    sys.exit(1)
-
-# Object Identifiers (OIDs) used to query network devices.
-# See http://tools.cisco.com/Support/SNMP/do/BrowseOID.do for full description.
-
-# Device Information
-sysDescrOid = '1.3.6.1.2.1.1.1.0'
-sysUptimeOid = '1.3.6.1.2.1.1.3.0'
-sysContactOid = '1.3.6.1.2.1.1.4.0'
-sysNameOid = '1.3.6.1.2.1.1.5.0'
-sysLocationOid = '1.3.6.1.2.1.1.6.0'
-entPhysicalSerialNumOid = '1.3.6.1.2.1.47.1.1.1.1.11'
-chassisSerialNumberStringOid = '1.3.6.1.4.1.9.5.1.2.19'
-
-# for asscoiating mac addresses to a port
-atPhysAddressOid = '1.3.6.1.2.1.3.1.1.2'
-vtpVlanStateOid = '1.3.6.1.4.1.9.9.46.1.3.1.1.'         # List of VLans to use for indexing
-dot1dTpFdbAddressOid = '1.3.6.1.2.1.17.4.3.1.1'         # List of MACs
-dot1dTpFdbPortOid = '1.3.6.1.2.1.17.4.3.1.2'            # Port associated to MAC
-dot1dBasePortIfIndexOid = '1.3.6.1.2.1.17.1.4.1.2'      # Name of port
-
-# Cisco Discovery Pprotocol (CDP) Neighbors
-cdpCacheAddressOid = '1.3.6.1.4.1.9.9.23.1.2.1.1.4'     # HEX of IP address W\ Marker
-cdpCacheDeviceIdOid = '1.3.6.1.4.1.9.9.23.1.2.1.1.6'    # NAME of neighbors W\ Marker
-cdpCacheDevicePortOid = '1.3.6.1.4.1.9.9.23.1.2.1.1.7'  # PORT of neighbors W\ Marker
-cdpCachePlatformOid = '1.3.6.1.4.1.9.9.23.1.2.1.1.8'    # Neighbor's Hardware Platform.
-
-# Interface specific information
-ifIndexOid = '1.3.6.1.2.1.2.2.1.1'
-ifNameOid = '1.3.6.1.2.1.31.1.1.1.1'
-ifAdminStatusOid = '1.3.6.1.2.1.2.2.1.7'
-ifOperStatusOid = '1.3.6.1.2.1.2.2.1.8'
-ifAliasOid = '1.3.6.1.2.1.31.1.1.1.18'
-ifSpeedOid = '1.3.6.1.2.1.2.2.1.5'
-ifInErrorsOid = '1.3.6.1.2.1.2.2.1.14'
-ifOutErrorsOid = '1.3.6.1.2.1.2.2.1.20'
-vlanTrunkPortDynamicStatusOid = '1.3.6.1.4.1.9.9.46.1.6.1.1.14'
-vmVlanOid = '1.3.6.1.4.1.9.9.68.1.2.2.1.2'
-dot3StatsDuplexStatusOid = '1.3.6.1.2.1.10.7.2.1.19'
-
-
-# Description:        SNMP helper function: BULKGET a list of OIDs.
-# Returns:            A list of values returned from the Network Device.
-def snmp_get_bulk_oid(ip, community, oid_list):
+# Description:        SNMP helper function: Collects OID values.
+# Returns:            The value of the OID/OIDs passed in as an 'oid'.
+def snmp_query(ip, community, oid, method):
     """
     :param ip: IP Address
     :param community: Community String
-    :param oid_list: List of OID string
-    :return result: list of values related to the supplied OID
+    :param oid: List of strings containing OIDs
+    :param method: Required a valid method of SNMP query WALK|BULK. BULK can be a single oid in a list.
+    :return result: Value/s related to the supplied OID
     """
-    cg = cmdgen.CommandGenerator()
-    err_indicator, err_status, err_index, result_t = cg.getCmd(
-        cmdgen.CommunityData(community),
-        cmdgen.UdpTransportTarget((ip, 161), timeout=2, retries=1),
-        *oid_list
-    )
-    result = []
-    for row in result_t:
-        result.append(row[1].prettyPrint())
-    return result
+    valid = {'WALK', 'BULK'}
+    if method not in valid:
+        raise ValueError("Query method must be one of %r." % valid)
 
+    if method == 'WALK':
+        cg = cmdgen.CommandGenerator()
+        err_indicator, err_status, err_index, result = cg.nextCmd(
+            cmdgen.CommunityData(community),
+            cmdgen.UdpTransportTarget((ip, 161), timeout=3, retries=1),
+            oid)
+        if err_indicator:
+            result = ''
+        return result
 
-# Description:        SNMP helper function: GET a single OID and return.
-# Returns:            The value of the 'oid' passed in as an argument.
-def snmp_get_single_oid(ip, community, oid):
-    """
-    :param ip: IP Address
-    :param community: Community String
-    :param oid: OID String
-    :return result: A value related to the supplied OID
-    """
-    cg = cmdgen.CommandGenerator()
-    err_indicator, err_status, err_index, result = cg.getCmd(
-        cmdgen.CommunityData(community),
-        cmdgen.UdpTransportTarget((ip, 161), timeout=2, retries=0),
-        oid
-    )
-    if err_indicator:
-        result = ''
-    else:
-        for key, value in result:
-            result = value.prettyPrint()
-    return result
-
-
-# Description:        SNMP helper function: WALK an OID.
-# Returns:            [ (oid, value), (oid_next, value_next) ... ]
-def snmp_walk_oid(ip, community, oid):
-    """
-    :param ip: IP Address
-    :param community: Community String
-    :param oid: OID String
-    :return result: A list of OID values related to the supplied OID base
-    """
-    cg = cmdgen.CommandGenerator()
-    err_indicator, err_status, err_index, result = cg.nextCmd(
-        cmdgen.CommunityData(community),
-        cmdgen.UdpTransportTarget((ip, 161), timeout=3, retries=1),
-        oid
-    )
-    if err_indicator:
-        result = ''
-    return result
+    if method == 'BULK':
+        cg = cmdgen.CommandGenerator()
+        err_indicator, err_status, err_index, result_t = cg.getCmd(
+            cmdgen.CommunityData(community),
+            cmdgen.UdpTransportTarget((ip, 161), timeout=2, retries=1),
+            *oid)
+        result = []
+        for row in result_t:
+            result.append(row[1].prettyPrint())
+        return result
 
 
 # Description:        Get the people friendly interface names.
@@ -137,7 +64,7 @@ def get_ifname(ip, community):
     :return ifname_dict:  key is  port id, value is friendly name {'10001': 'Fa0/1'}
     """
     ifname_dict = {'0': 'MfPkt/0'}
-    ifnames = snmp_walk_oid(ip, community, ifNameOid)
+    ifnames = snmp_query(ip, community, oid.ifNameOid, 'WALK')
     for ifname in ifnames:
         for val, name in ifname:
             val = '.'.join(val.prettyPrint().split('.')[-1:])
@@ -154,7 +81,8 @@ def get_device_status(ip, community):
     :param community: Community String
     :return Boolean
     """
-    snmp_check = snmp_get_single_oid(ip, community, sysNameOid)
+    snmp_check = snmp_query(ip, community, [oid.sysNameOid], 'BULK')
+    print(snmp_check[0])
     if snmp_check:
         return True
     else:
@@ -170,7 +98,7 @@ def get_arp_table(ip, community):
     :return arp_ip_list: List of tuples [(IP, MAC), (IP, MAC)]
     """
     arp_ip_list = []
-    arp_table = snmp_walk_oid(ip, community, atPhysAddressOid)
+    arp_table = snmp_query(ip, community, oid.atPhysAddressOid, 'WALK')
     for entry in arp_table:
         for name, val in entry:
             name = '.'.join(name.prettyPrint().split('.')[-4:])
@@ -188,13 +116,13 @@ def get_device_info(ip, community):
     :param community: Community String
     :return result: [syslocation, sysname, sysdescr, sysuptime, syscontact]
     """
-    bulkget = [sysLocationOid,  # sysLocationOid
-               sysNameOid,  # sysNameOid
-               sysDescrOid,  # sysDescrOid (hex)
-               sysUptimeOid,  # sysUptimeOid (timeticks, 1/100 sec)
-               sysContactOid]  # sysContactOid
+    bulkget = [oid.sysLocationOid,  # sysLocationOid
+               oid.sysNameOid,  # sysNameOid
+               oid.sysDescrOid,  # sysDescrOid (hex)
+               oid.sysUptimeOid,  # sysUptimeOid (timeticks, 1/100 sec)
+               oid.sysContactOid]  # sysContactOid
 
-    bulkreturn = snmp_get_bulk_oid(ip, community, bulkget)
+    bulkreturn = snmp_query(ip, community, bulkget, 'BULK')
     syslocation, sysname, sysdescr, sysuptime, syscontact = bulkreturn
 
     if syslocation is None:
@@ -234,32 +162,25 @@ def get_serial(ip, community):
     :return:
     """
     serial_nums = []
-    chasis_result = snmp_walk_oid(ip, community, chassisSerialNumberStringOid)
-    device_result = snmp_walk_oid(ip, community, entPhysicalSerialNumOid)
-    # print chasis_result
-    # print device_result
+    chasis_result = snmp_query(ip, community, oid.chassisSerialNumberStringOid, 'WALK')
+    device_result = snmp_query(ip, community, oid.entPhysicalSerialNumOid, 'WALK')
     if chasis_result:
         for X in chasis_result:
-            # print X
             if X:
                 x_oid, x_serial = X[0]
-                # print x_serial
                 if len(x_serial) == 11:
                     serial_nums.append(str(x_serial).strip())
 
     if device_result:
         for X in device_result:
-            # print X
             if X:
                 x_oid, x_serial = X[0]
-                # print x_serial
                 if len(x_serial) == 11:
                     serial_nums.append(str(x_serial).strip())
 
     for serialX in serial_nums:
         if len(serialX) < 10:
             serial_nums.remove(serialX)
-    # print serial_nums
     return serial_nums
 
 
@@ -273,9 +194,7 @@ def get_mfg_date(serial_nums):
     """
     serialnum_mfgdate = {}
     date_stamp = 5052
-    # print serial_nums
     for serial_num in serial_nums:
-        # print serial_num
         ser_year = serial_num[3:5]
         ser_month = int(serial_num[5:7])
         base_year = 1996
@@ -321,11 +240,11 @@ def get_vlans(ip, community):
     :return filtered_vlans: Returns list of VLANS
     """
     filtered_vlans = []
-    vlan_list = snmp_walk_oid(ip, community, vtpVlanStateOid)
+    vlan_list = snmp_query(ip, community, oid.vtpVlanStateOid, 'WALK')
     for vlan_obj in vlan_list:
         for vlans in vlan_obj:
-            oid, vlan = vlans
-            vlan = str(oid).split('.')[-1]
+            vlan_oid, vlan = vlans
+            vlan = str(vlan_oid).split('.')[-1]
             if re.search(r'100[2345]', vlan):
                 continue
             if vlan not in filtered_vlans:
@@ -345,11 +264,11 @@ def get_vlan_macs(ip, community, vlans):
     """
     macs = {}
     for vlan in vlans:
-        results = snmp_walk_oid(ip, community + '@{vlan_index}'.format(vlan_index=vlan), dot1dTpFdbAddressOid)
+        results = snmp_query(ip, community + '@{vlan_index}'.format(vlan_index=vlan), oid.dot1dTpFdbAddressOid, 'WALK')
         for result in results:
             if result:
                 dec_mac, hex_mac = result[0]
-                dec_mac = dec_mac.prettyPrint().replace(dot1dTpFdbAddressOid + '.', '')
+                dec_mac = dec_mac.prettyPrint().replace(oid.dot1dTpFdbAddressOid + '.', '')
                 hex_mac = hex_mac.prettyPrint().replace('0x', '')
                 macs[dec_mac] = hex_mac
     return macs
@@ -366,13 +285,12 @@ def get_port_if_index(ip, community, vlans):
     """
     port_index = {'0': '0'}
     for vlan in vlans:
-        results = snmp_walk_oid(ip, community + '@{vlan_index}'.format(vlan_index=vlan), dot1dBasePortIfIndexOid)
+        results = snmp_query(ip, community + '@{vlan_index}'.format(vlan_index=vlan), oid.dot1dBasePortIfIndexOid, 'WALK')
         for result in results:
             if result[0]:
                 iface, port_id = result[0]
                 iface = '.'.join(x for x in str(iface).split('.')[-1:])
                 port_id = port_id.prettyPrint()
-
                 port_index[iface] = port_id
     return port_index
 
@@ -388,7 +306,7 @@ def get_iface_macs(ip, community, vlans):
     """
     iface_dec_macs = defaultdict(list)
     for vlan in vlans:
-        results = snmp_walk_oid(ip, community + '@{vlan_index}'.format(vlan_index=vlan), dot1dTpFdbPortOid)
+        results = snmp_query(ip, community + '@{vlan_index}'.format(vlan_index=vlan), oid.dot1dTpFdbPortOid, 'WALK')
         for result in results:
             if result[0]:
                 dec_mac, port_id = result[0]
@@ -414,24 +332,23 @@ def get_neighbors(ip, community, ifname, trunks):
         for idx in trunks:
             # TODO: Build list and do Bulkget?...
 
-            n_address = snmp_walk_oid(ip, community, cdpCacheAddressOid + '.{index}'.format(index=idx))
-            # print n_address
+            n_address = snmp_query(ip, community, oid.cdpCacheAddressOid + '.{index}'.format(index=idx), 'WALK')
 
             if n_address:
                 tbl_idx = (str(n_address[0][0][0]).split('.'))[-2:]
                 tbl_idx = '.'.join(i for i in tbl_idx)
-                bulkget = [cdpCacheDeviceIdOid,
-                           cdpCacheDevicePortOid,
-                           cdpCachePlatformOid]
+                bulkget = [oid.cdpCacheDeviceIdOid,
+                           oid.cdpCacheDevicePortOid,
+                           oid.cdpCachePlatformOid]
                 for i in range(len(bulkget)):  # Building list
                     bulkget[i] = "{bulk}.{table_index}".format(bulk=bulkget[i],
                                                                table_index=tbl_idx)
-                bulkreturn = snmp_get_bulk_oid(ip, community, bulkget)
+                bulkreturn = snmp_query(ip, community, bulkget, 'BULK')
                 n_deviceid = bulkreturn[0]
                 n_port = bulkreturn[1]
                 n_platform = bulkreturn[2]
 
-                n_address = n_address[0][0][1].pprint().replace('0x', '')
+                n_address = n_address[0][0][1].prettyPrint().replace('0x', '')
                 n_address = re.findall('..', n_address)  # Slow?
                 n_address = '.'.join(str(int(i, 16)) for i in n_address)  # Slow?
 
@@ -468,20 +385,20 @@ def get_deviceports(ip, community, ifindex, datetime):
     if ifindex:
         for iface in ifindex:
             for name, idx in iface:
-                bulkget = [ifNameOid + '.',
-                           ifAdminStatusOid + '.',
-                           ifOperStatusOid + '.',
-                           ifAliasOid + '.',
-                           ifSpeedOid + '.',
-                           dot3StatsDuplexStatusOid + '.',
-                           vlanTrunkPortDynamicStatusOid + '.',
-                           vmVlanOid + '.',
-                           ifInErrorsOid + '.',
-                           ifOutErrorsOid + '.']
+                bulkget = [oid.ifNameOid + '.',
+                           oid.ifAdminStatusOid + '.',
+                           oid.ifOperStatusOid + '.',
+                           oid.ifAliasOid + '.',
+                           oid.ifSpeedOid + '.',
+                           oid.dot3StatsDuplexStatusOid + '.',
+                           oid.vlanTrunkPortDynamicStatusOid + '.',
+                           oid.vmVlanOid + '.',
+                           oid.ifInErrorsOid + '.',
+                           oid.ifOutErrorsOid + '.']
 
                 for i in range(len(bulkget)):  # Bulding list
                     bulkget[i] = "{bulk}{index}".format(bulk=bulkget[i], index=idx)
-                bulkreturn = snmp_get_bulk_oid(ip, community, bulkget)
+                bulkreturn = snmp_query(ip, community, bulkget, 'BULK')
                 ifname = bulkreturn[0]
 
                 ifadminstatus = bulkreturn[1]
@@ -512,7 +429,6 @@ def get_deviceports(ip, community, ifindex, datetime):
                 # If ifname is its full form, e.g. "TenGigabitEthernet 0/1",
                 # truncate it to "Te0/1"
                 if re.match(r'\w+\s.*$', str(ifname)):
-                    # print 'regex name truncate hit: {name}'.format(name=ifname)
                     s = str(ifname)
                     ifname = s.split(' ', 1)[0][:2] + s.split(' ', 1)[1]
 
@@ -638,19 +554,17 @@ class Device:
         if self.alive:
             self.syslocation, self.sysname, self.sysdescr, self.sysuptime, self.syscontact = \
                 get_device_info(ip, community)
-            self.ifindex = snmp_walk_oid(ip, community, ifIndexOid)
+            self.ifindex = snmp_query(ip, community, oid.ifIndexOid, 'WALK')
             self.deviceports, self.ifname, self.trunkports = get_deviceports(ip, community, self.ifindex, self.datetime)
             self.arp_table = get_arp_table(ip, community)
             self.vlans = get_vlans(ip, community)
             self.is_cisco = get_is_cisco(self.sysdescr)
-            self.note = 0  # TODO: Why is this here?
-            self.archive_date = 'NULL'
-            if self.is_cisco:
-                # WTF AM I DOING HERE?...
-                self.serial_num = get_serial(ip, community)
-                if self.serial_num:
-                    self.serial_mfg_date = get_mfg_date(self.serial_num)
-                    self.serial_num, self.mfg_date = self.serial_mfg_date[0]
+            self.note = 0                               # Placeholder for future use.
+            self.archive_date = 'NULL'                  # Placeholder for future use.
+            self.serial_num = get_serial(ip, community)
+            if self.is_cisco and self.serial_num:
+                self.serial_mfg_date = get_mfg_date(self.serial_num)
+                self.mfg_date = self.serial_mfg_date[0][1]
             self.if_index = get_port_if_index(ip, community, self.vlans)
             self.port_macs = get_iface_macs(ip, community, self.vlans)
             self.port_mac_index = get_mac_port(self.port_macs, self.ifname, self.if_index)
