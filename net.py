@@ -8,7 +8,7 @@ __author__ = 'Mike Seeley'
 
 """
 net.py
- Creates a Device object that contains varying information regard network ports attached devices and other details.
+Creates a Device object that contains varying information regard network ports attached devices and other details.
 
 """
 
@@ -45,9 +45,7 @@ def snmp_query(ip, community, oid, method):
             cmdgen.CommunityData(community),
             cmdgen.UdpTransportTarget((ip, 161), timeout=2, retries=1),
             *oid)
-        result = []
-        for row in result_t:
-            result.append(row[1].prettyPrint())
+        result = [row[1].prettyPrint() for row in result_t]
         return result
 
 
@@ -83,10 +81,7 @@ def get_device_status(ip, community):
     """
     snmp_check = snmp_query(ip, community, [oid.sysNameOid], 'BULK')
     print(snmp_check[0])
-    if snmp_check:
-        return True
-    else:
-        return False
+    return bool(snmp_check)
 
 
 # Description:        Get physically attached devices.
@@ -140,7 +135,11 @@ def get_device_info(ip, community):
 
     if get_is_cisco(sysdescr):
         # TODO: this needs work to verify cisco....
-        sysdescr = "".join([chr(int(sysdescr[x:x + 2], 16)) for x in range(2, len(sysdescr), 2)])
+        sysdescr = "".join(
+            chr(int(sysdescr[x : x + 2], 16))
+            for x in range(2, len(sysdescr), 2)
+        )
+
 
     seconds = int(sysuptime) / 100
     m, s = divmod(seconds, 60)
@@ -148,8 +147,7 @@ def get_device_info(ip, community):
     d, h = divmod(h, 24)
     sysuptime = '{days}:{hours}:{mins}:{secs}'.format(days=str(d), hours=str(h), mins=str(m), secs=str(s))
 
-    result = [syslocation, sysname, sysdescr, sysuptime, syscontact]
-    return result
+    return [syslocation, sysname, sysdescr, sysuptime, syscontact]
 
 
 # Description:        Get Cisco Serial number.
@@ -194,13 +192,11 @@ def get_mfg_date(serial_nums):
     """
     serialnum_mfgdate = {}
     date_stamp = 5052
+    base_year = 1996
     for serial_num in serial_nums:
-        ser_year = serial_num[3:5]
-        ser_month = int(serial_num[5:7])
-        base_year = 1996
-        mfg_year = str(base_year + int(ser_year))
         if int(serial_num[3:7]) < date_stamp:
             mfg_month = '0'
+            ser_month = int(serial_num[5:7])
             if ser_month in range(1, 6):
                 mfg_month = '1'
             if ser_month in range(6, 10):
@@ -226,6 +222,8 @@ def get_mfg_date(serial_nums):
             if ser_month in range(49, 53):
                 mfg_month = '12'
             serialnum_mfgdate.clear()
+            ser_year = serial_num[3:5]
+            mfg_year = str(base_year + int(ser_year))
             serialnum_mfgdate[serial_num] = '{year} {month}'.format(year=mfg_year, month=mfg_month)
     serialnum_mfgdate = serialnum_mfgdate.items()
     return serialnum_mfgdate
@@ -289,7 +287,7 @@ def get_port_if_index(ip, community, vlans):
         for result in results:
             if result[0]:
                 iface, port_id = result[0]
-                iface = '.'.join(x for x in str(iface).split('.')[-1:])
+                iface = '.'.join(str(iface).split('.')[-1:])
                 port_id = port_id.prettyPrint()
                 port_index[iface] = port_id
     return port_index
@@ -310,7 +308,7 @@ def get_iface_macs(ip, community, vlans):
         for result in results:
             if result[0]:
                 dec_mac, port_id = result[0]
-                dec_mac = '.'.join(x for x in str(dec_mac).split('.')[-6:])
+                dec_mac = '.'.join(str(dec_mac).split('.')[-6:])
                 port_id = port_id.prettyPrint()
                 iface_dec_macs[port_id].append(dec_mac)
     return iface_dec_macs
@@ -334,38 +332,37 @@ def get_neighbors(ip, community, ifname, trunks):
 
             n_address = snmp_query(ip, community, oid.cdpCacheAddressOid + '.{index}'.format(index=idx), 'WALK')
 
-            if n_address:
-                tbl_idx = (str(n_address[0][0][0]).split('.'))[-2:]
-                tbl_idx = '.'.join(i for i in tbl_idx)
-                bulkget = [oid.cdpCacheDeviceIdOid,
-                           oid.cdpCacheDevicePortOid,
-                           oid.cdpCachePlatformOid]
-                for i in range(len(bulkget)):  # Building list
-                    bulkget[i] = "{bulk}.{table_index}".format(bulk=bulkget[i],
-                                                               table_index=tbl_idx)
-                bulkreturn = snmp_query(ip, community, bulkget, 'BULK')
-                n_deviceid = bulkreturn[0]
-                n_port = bulkreturn[1]
-                n_platform = bulkreturn[2]
-
-                n_address = n_address[0][0][1].prettyPrint().replace('0x', '')
-                n_address = re.findall('..', n_address)  # Slow?
-                n_address = '.'.join(str(int(i, 16)) for i in n_address)  # Slow?
-
-                if n_port:
-                    p = re.compile(r'([A-Z].)[a-zA-Z]*(\d.*)')
-                    x = re.findall(p, n_port)  # Slow?
-                    ''' It appears that on rare instances these will be empty '''
-                    try:
-                        n_port = x[0][0] + x[0][1]
-                    except IndexError:
-                        pass
-
-                neighbor = [ip, ifname[idx], n_address, n_deviceid, n_port, n_platform]
-                result.append(neighbor)
-
-            else:
+            if not n_address:
                 continue
+            tbl_idx = (str(n_address[0][0][0]).split('.'))[-2:]
+            tbl_idx = '.'.join(tbl_idx)
+            bulkget = [oid.cdpCacheDeviceIdOid,
+                       oid.cdpCacheDevicePortOid,
+                       oid.cdpCachePlatformOid]
+            for i in range(len(bulkget)):  # Building list
+                bulkget[i] = "{bulk}.{table_index}".format(bulk=bulkget[i],
+                                                           table_index=tbl_idx)
+            bulkreturn = snmp_query(ip, community, bulkget, 'BULK')
+            n_deviceid = bulkreturn[0]
+            n_port = bulkreturn[1]
+            n_platform = bulkreturn[2]
+
+            n_address = n_address[0][0][1].prettyPrint().replace('0x', '')
+            n_address = re.findall('..', n_address)  # Slow?
+            n_address = '.'.join(str(int(i, 16)) for i in n_address)  # Slow?
+
+            if n_port:
+                p = re.compile(r'([A-Z].)[a-zA-Z]*(\d.*)')
+                x = re.findall(p, n_port)  # Slow?
+                ''' It appears that on rare instances these will be empty '''
+                try:
+                    n_port = x[0][0] + x[0][1]
+                except IndexError:
+                    pass
+
+            neighbor = [ip, ifname[idx], n_address, n_deviceid, n_port, n_platform]
+            result.append(neighbor)
+
     return result
 
 
@@ -413,15 +410,8 @@ def get_deviceports(ip, community, ifindex, datetime):
                 val = '.'.join(idx.prettyPrint().split('.')[-1:])
                 ifname_dict[val] = ifname
 
-                if bulkreturn[8].isdigit():
-                    ifinerror = bulkreturn[8]
-                else:
-                    ifinerror = None
-                if bulkreturn[9].isdigit():
-                    ifouterror = bulkreturn[9]
-                else:
-                    ifouterror = None
-
+                ifinerror = bulkreturn[8] if bulkreturn[8].isdigit() else None
+                ifouterror = bulkreturn[9] if bulkreturn[9].isdigit() else None
                 # Skip 'Vlan' and 'Null' interfaces
                 if re.search(r'(Vl.*)|(Nu.*)', str(ifname), re.IGNORECASE):
                     continue
@@ -435,20 +425,15 @@ def get_deviceports(ip, community, ifindex, datetime):
                 # Interface operational status
                 if ifadminstatus == '2':
                     ifstatus = 'shutdown'
+                elif ifoperstatus == '1':
+                    ifstatus = 'up'
+                elif ifoperstatus == '2':
+                    ifstatus = 'down'
                 else:
-                    if ifoperstatus == '1':
-                        ifstatus = 'up'
-                    elif ifoperstatus == '2':
-                        ifstatus = 'down'
-                    else:
-                        ifstatus = ''
+                    ifstatus = ''
 
                 # Last time seen (Unix time)
-                if ifstatus == 'up':
-                    seen = datetime
-                else:
-                    seen = False
-
+                seen = datetime if ifstatus == 'up' else False
                 # Alias clean-up
                 if str(ifalias) == '0x0000':
                     ifalias = ''
@@ -477,14 +462,13 @@ def get_deviceports(ip, community, ifindex, datetime):
                 if is_trunk == '1':
                     vlan = 'trunk'
                     trunks.append(val)
-                else:
-                    if vlan:
-                        try:
-                            vlan = int(vlan)
-                        except ValueError:
-                            vlan = ''
-                    else:
+                elif vlan:
+                    try:
+                        vlan = int(vlan)
+                    except ValueError:
                         vlan = ''
+                else:
+                    vlan = ''
 
                 iface = [ifname, ifstatus, seen, ifalias, vlan, speed_duplex, ifinerror, ifouterror]
                 result.append(iface)
@@ -499,10 +483,7 @@ def get_is_cisco(descr):
     :param descr: Text string containing the system desctiption
     :return boolean:
     """
-    if re.search(r'.*cisco.*', descr, re.IGNORECASE):
-        return True
-    else:
-        return False
+    return bool(re.search(r'.*cisco.*', descr, re.IGNORECASE))
 
 
 # Description:        Returns index of port ID to human name and associated MACS..
